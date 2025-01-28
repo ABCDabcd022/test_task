@@ -1,1 +1,123 @@
+1. Новые торговые точки
+WITH FirstPurchases AS (
+    SELECT 
+        client_id,
+        MIN(purchase_date) AS first_purchase_date
+    FROM 
+        Orders
+    GROUP BY 
+        client_id
+),
+MonthlyFirstPurchases AS (
+    SELECT 
+        client_id,
+        DATE_TRUNC('month', first_purchase_date) AS purchase_month
+    FROM 
+        FirstPurchases
+)
+SELECT 
+    TO_CHAR(m.purchase_month, 'YYYY/MM') AS purchase_month,
+    m.client_id
+FROM 
+    MonthlyFirstPurchases m
+WHERE 
+    NOT EXISTS (
+        SELECT 1
+        FROM MonthlyFirstPurchases m2
+        WHERE m2.client_id = m.client_id AND m2.purchase_month < m.purchase_month
+    )
+ORDER BY 
+    purchase_month;
+
+2. Торговые точки, сделавшие заказ в прошлом месяце и в этом
+WITH MonthlyOrders AS (
+    SELECT 
+        client_id,
+        TO_CHAR(purchase_date, 'YYYY-MM') AS month_year
+    FROM 
+        Orders
+    GROUP BY 
+        client_id, month_year
+),
+PreviousMonthOrders AS (
+    SELECT 
+        client_id,
+        month_year,
+        LEAD(month_year) OVER (PARTITION BY client_id ORDER BY month_year) AS next_month_year
+    FROM 
+        MonthlyOrders
+)
+SELECT 
+    current.month_year,
+    current.client_id
+FROM 
+    PreviousMonthOrders current
+JOIN 
+    PreviousMonthOrders previous 
+ON 
+    current.client_id = previous.client_id 
+AND 
+    previous.next_month_year = current.month_year
+ORDER BY 
+    current.month_year, current.client_id;
+
+3. Торговые точки, которые когда-то что-то заказали (только не в прошлом месяце) и вернувшиеся.
+WITH OrderMonths AS (
+    SELECT 
+        client_id,
+        TO_CHAR(purchase_date, 'YYYY-MM') AS month
+    FROM Orders
+    GROUP BY client_id, TO_CHAR(purchase_date, 'YYYY-MM')
+),
+PreviousOrders AS (
+    SELECT 
+        o1.client_id,
+        o1.month AS current_month,
+        o2.month AS previous_month
+    FROM OrderMonths o1
+    LEFT JOIN OrderMonths o2 
+        ON o1.client_id = o2.client_id
+        AND TO_CHAR((TO_DATE(o1.month || '-01', 'YYYY-MM-DD') - INTERVAL '1 month'), 'YYYY-MM') = o2.month
+    WHERE o2.month IS NULL -- нет заказов в прошлом месяце
+),
+ReturnedOrders AS (
+    SELECT 
+        po.client_id,
+        po.current_month
+    FROM PreviousOrders po
+    JOIN OrderMonths o
+        ON po.client_id = o.client_id
+        AND o.month < po.current_month -- есть заказы в более ранних месяцах
+    GROUP BY po.client_id, po.current_month
+)
+SELECT 
+    current_month,
+    client_id
+FROM ReturnedOrders
+ORDER BY current_month, client_id;
+
+4. Торговые точки, отвалившиеся в этом месяце.
+WITH LastOrders AS (
+    SELECT 
+        client_id,
+        TO_CHAR(MAX(purchase_date), 'YYYY-MM') AS last_order_month
+    FROM Orders
+    GROUP BY client_id
+),
+MonthlyOrders AS (
+    SELECT 
+        client_id,
+        TO_CHAR(purchase_date, 'YYYY-MM') AS order_month
+    FROM Orders
+    GROUP BY client_id, TO_CHAR(purchase_date, 'YYYY-MM')
+)
+SELECT 
+    mo.order_month AS month,
+    mo.client_id
+FROM MonthlyOrders mo
+JOIN LastOrders lo
+    ON mo.client_id = lo.client_id
+   AND mo.order_month = lo.last_order_month
+ORDER BY month, client_id;
+
 
